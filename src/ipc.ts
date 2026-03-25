@@ -476,33 +476,53 @@ export async function processTaskIpc(
         break;
       }
 
-      const scriptPath = path.join(process.cwd(), 'scripts', 'webapp-deploy.sh');
+      const scriptPath = path.join(
+        process.cwd(),
+        'scripts',
+        'webapp-deploy.sh',
+      );
       const args = data.name ? [action, data.name] : [action];
       const resultFileName = data.requestId
         ? `webapp-result-${data.requestId}.json`
         : 'webapp-result.json';
-      const resultFile = path.join(DATA_DIR, 'ipc', sourceGroup, resultFileName);
+      const resultFile = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        resultFileName,
+      );
 
       try {
         const result = await new Promise<string>((resolve, reject) => {
-          execFile('bash', [scriptPath, ...args], { timeout: 60000 }, (err, stdout, stderr) => {
-            if (err) {
-              reject(new Error(stderr || err.message));
-              return;
-            }
-            resolve(stdout.trim());
-          });
+          execFile(
+            'bash',
+            [scriptPath, ...args],
+            { timeout: 60000 },
+            (err, stdout, stderr) => {
+              if (err) {
+                reject(new Error(stderr || err.message));
+                return;
+              }
+              resolve(stdout.trim());
+            },
+          );
         });
 
         fs.writeFileSync(resultFile, result);
-        logger.info({ action, name: data.name, sourceGroup }, 'Webapp IPC processed');
+        logger.info(
+          { action, name: data.name, sourceGroup },
+          'Webapp IPC processed',
+        );
       } catch (err) {
         const errorResult = JSON.stringify({
           status: 'error',
           message: err instanceof Error ? err.message : String(err),
         });
         fs.writeFileSync(resultFile, errorResult);
-        logger.error({ action, name: data.name, err }, 'Webapp deploy script failed');
+        logger.error(
+          { action, name: data.name, err },
+          'Webapp deploy script failed',
+        );
       }
       break;
     }

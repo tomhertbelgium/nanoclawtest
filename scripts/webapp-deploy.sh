@@ -11,8 +11,10 @@ CADDYFILE="/etc/caddy/Caddyfile"
 DOMAIN="intellilab.dev"
 PORT_START=9100
 MAX_PROJECTS=20
+LANDING_SCRIPT="$(dirname "$0")/update-landing.sh"
 
 error() { echo "{\"status\":\"error\",\"message\":\"$1\"}"; exit 0; }
+update_landing() { [ -x "${LANDING_SCRIPT}" ] && "${LANDING_SCRIPT}" 2>/dev/null || true; }
 
 # Ensure dirs and ports file exist
 mkdir -p "${APPS_DIR}" "${ARCHIVE_DIR}"
@@ -76,6 +78,7 @@ CADDY
     jq --arg name "${NAME}" --argjson port "${PORT}" '. + {($name): $port}' "${PORTS_FILE}" > "${PORTS_FILE}.tmp"
     mv "${PORTS_FILE}.tmp" "${PORTS_FILE}"
 
+    update_landing
     echo "{\"status\":\"ok\",\"url\":\"https://${DOMAIN}/${NAME}/\",\"port\":${PORT}}"
     ;;
 
@@ -103,6 +106,7 @@ CADDY
     jq --arg name "${NAME}" 'del(.[$name])' "${PORTS_FILE}" > "${PORTS_FILE}.tmp"
     mv "${PORTS_FILE}.tmp" "${PORTS_FILE}"
 
+    update_landing
     echo "{\"status\":\"ok\",\"message\":\"Project ${NAME} removed and archived\"}"
     ;;
 
