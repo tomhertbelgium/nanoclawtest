@@ -6,6 +6,8 @@ import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+import os from 'os';
+
 import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
@@ -92,6 +94,15 @@ function buildVolumeMounts(
     mounts.push({
       hostPath: groupDir,
       containerPath: '/workspace/group',
+      readonly: false,
+    });
+
+    // Mount apps directory for webapp deployer (main only)
+    const appsDir = path.join(os.homedir(), 'apps');
+    fs.mkdirSync(appsDir, { recursive: true });
+    mounts.push({
+      hostPath: appsDir,
+      containerPath: '/workspace/extra/apps',
       readonly: false,
     });
   } else {

@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -172,6 +173,9 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For webapp
+    action?: string;
+    requestId?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -454,6 +458,54 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'webapp': {
+      if (!isMain) {
+        logger.warn({ sourceGroup }, 'Unauthorized webapp attempt blocked');
+        break;
+      }
+
+      const action = data.action;
+      if (!action || !['deploy', 'kill', 'list'].includes(action)) {
+        logger.warn({ action }, 'Invalid webapp action');
+        break;
+      }
+
+      if ((action === 'deploy' || action === 'kill') && !data.name) {
+        logger.warn({ action }, 'Webapp action requires name');
+        break;
+      }
+
+      const scriptPath = path.join(process.cwd(), 'scripts', 'webapp-deploy.sh');
+      const args = data.name ? [action, data.name] : [action];
+      const resultFileName = data.requestId
+        ? `webapp-result-${data.requestId}.json`
+        : 'webapp-result.json';
+      const resultFile = path.join(DATA_DIR, 'ipc', sourceGroup, resultFileName);
+
+      try {
+        const result = await new Promise<string>((resolve, reject) => {
+          execFile('bash', [scriptPath, ...args], { timeout: 60000 }, (err, stdout, stderr) => {
+            if (err) {
+              reject(new Error(stderr || err.message));
+              return;
+            }
+            resolve(stdout.trim());
+          });
+        });
+
+        fs.writeFileSync(resultFile, result);
+        logger.info({ action, name: data.name, sourceGroup }, 'Webapp IPC processed');
+      } catch (err) {
+        const errorResult = JSON.stringify({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+        fs.writeFileSync(resultFile, errorResult);
+        logger.error({ action, name: data.name, err }, 'Webapp deploy script failed');
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

@@ -333,6 +333,155 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// --- Webapp deployer tools ---
+
+async function pollForWebappResult(requestId: string, timeoutMs: number): Promise<any | null> {
+  const resultPath = path.join(IPC_DIR, `webapp-result-${requestId}.json`);
+  // Remove stale result
+  try { fs.unlinkSync(resultPath); } catch { /* ignore */ }
+
+  const start = Date.now();
+  await new Promise(r => setTimeout(r, 500));
+
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(resultPath)) {
+      try {
+        const content = fs.readFileSync(resultPath, 'utf-8');
+        fs.unlinkSync(resultPath);
+        return JSON.parse(content);
+      } catch { /* retry */ }
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return null;
+}
+
+server.tool(
+  'deploy_webapp',
+  `Deploy a static web project. Before calling this, write your project files to /workspace/extra/apps/<name>/ with at least an index.html. The project will be live at https://intellilab.dev/<name>/. Main group only.`,
+  {
+    name: z.string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,49}$/, 'Must be lowercase alphanumeric with hyphens, max 50 chars')
+      .describe('Project name (becomes the URL path)'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can deploy webapps.' }],
+        isError: true,
+      };
+    }
+
+    const projectDir = `/workspace/extra/apps/${args.name}`;
+    if (!fs.existsSync(path.join(projectDir, 'index.html'))) {
+      return {
+        content: [{ type: 'text' as const, text: `No index.html found at ${projectDir}. Write your project files there first.` }],
+        isError: true,
+      };
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'webapp',
+      action: 'deploy',
+      name: args.name,
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await pollForWebappResult(requestId, 30000);
+
+    if (result && result.status === 'ok') {
+      return {
+        content: [{ type: 'text' as const, text: `Deployed! Live at ${result.url}` }],
+      };
+    }
+    return {
+      content: [{ type: 'text' as const, text: `Deploy failed: ${result?.message || 'Timeout waiting for host response'}` }],
+      isError: true,
+    };
+  },
+);
+
+server.tool(
+  'kill_webapp',
+  'Remove a deployed web project. Stops its container, removes routing config, and archives files. Main group only.',
+  {
+    name: z.string().describe('Project name to remove'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can kill webapps.' }],
+        isError: true,
+      };
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'webapp',
+      action: 'kill',
+      name: args.name,
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await pollForWebappResult(requestId, 15000);
+
+    if (result && result.status === 'ok') {
+      return { content: [{ type: 'text' as const, text: result.message }] };
+    }
+    return {
+      content: [{ type: 'text' as const, text: `Kill failed: ${result?.message || 'Timeout'}` }],
+      isError: true,
+    };
+  },
+);
+
+server.tool(
+  'list_webapps',
+  'List all active deployed web projects with their URLs. Main group only.',
+  {},
+  async () => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Only the main group can list webapps.' }],
+        isError: true,
+      };
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'webapp',
+      action: 'list',
+      requestId,
+      timestamp: new Date().toISOString(),
+    });
+
+    const result = await pollForWebappResult(requestId, 15000);
+
+    if (!result) {
+      return {
+        content: [{ type: 'text' as const, text: 'Timeout waiting for webapp list.' }],
+        isError: true,
+      };
+    }
+
+    if (Array.isArray(result)) {
+      if (result.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'No active webapps.' }] };
+      }
+      const formatted = result
+        .map((p: { name: string; url: string; running: boolean }) =>
+          `- ${p.name}: ${p.url} (${p.running ? 'running' : 'stopped'})`)
+        .join('\n');
+      return { content: [{ type: 'text' as const, text: `Active webapps:\n${formatted}` }] };
+    }
+
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
