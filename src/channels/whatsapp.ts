@@ -28,6 +28,8 @@ import {
 import { registerChannel, ChannelOpts } from './registry.js';
 
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const STALE_CONNECTION_MS = 10 * 60 * 1000; // 10 minutes without any event = stale
 
 export interface WhatsAppChannelOpts {
   onMessage: OnInboundMessage;
@@ -46,6 +48,8 @@ export class WhatsAppChannel implements Channel {
   private groupSyncTimerStarted = false;
 
   private opts: WhatsAppChannelOpts;
+  private lastEventAt = Date.now();
+  private healthCheckTimer?: ReturnType<typeof setInterval>;
 
   constructor(opts: WhatsAppChannelOpts) {
     this.opts = opts;
@@ -82,6 +86,7 @@ export class WhatsAppChannel implements Channel {
     });
 
     this.sock.ev.on('connection.update', (update) => {
+      this.lastEventAt = Date.now();
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -142,6 +147,9 @@ export class WhatsAppChannel implements Channel {
           }
         }
 
+        // Start connection health watchdog
+        this.startHealthCheck();
+
         // Flush any messages queued while disconnected
         this.flushOutgoingQueue().catch((err) =>
           logger.error({ err }, 'Failed to flush outgoing queue'),
@@ -169,9 +177,13 @@ export class WhatsAppChannel implements Channel {
       }
     });
 
-    this.sock.ev.on('creds.update', saveCreds);
+    this.sock.ev.on('creds.update', () => {
+      this.lastEventAt = Date.now();
+      saveCreds();
+    });
 
     this.sock.ev.on('messages.upsert', async ({ messages }) => {
+      this.lastEventAt = Date.now();
       for (const msg of messages) {
         try {
           if (!msg.message) continue;
@@ -286,6 +298,10 @@ export class WhatsAppChannel implements Channel {
 
   async disconnect(): Promise<void> {
     this.connected = false;
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = undefined;
+    }
     this.sock?.end(undefined);
   }
 
@@ -337,6 +353,29 @@ export class WhatsAppChannel implements Channel {
     } catch (err) {
       logger.error({ err }, 'Failed to sync group metadata');
     }
+  }
+
+  private startHealthCheck(): void {
+    if (this.healthCheckTimer) clearInterval(this.healthCheckTimer);
+    this.lastEventAt = Date.now();
+    this.healthCheckTimer = setInterval(() => {
+      const silentMs = Date.now() - this.lastEventAt;
+      if (this.connected && silentMs > STALE_CONNECTION_MS) {
+        logger.warn(
+          { silentMs, threshold: STALE_CONNECTION_MS },
+          'Connection appears stale (no events received), forcing reconnect',
+        );
+        this.connected = false;
+        if (this.healthCheckTimer) {
+          clearInterval(this.healthCheckTimer);
+          this.healthCheckTimer = undefined;
+        }
+        this.sock.end(undefined);
+        this.connectInternal().catch((err) => {
+          logger.error({ err }, 'Health check reconnect failed');
+        });
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
   }
 
   private async translateJid(jid: string): Promise<string> {

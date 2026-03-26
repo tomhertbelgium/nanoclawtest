@@ -232,6 +232,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   await channel.setTyping?.(chatJid, true);
+
+  // Send acknowledgment so the user knows the agent is starting
+  await channel.sendMessage(chatJid, 'On it \u{1F44D}').catch((err) =>
+    logger.warn({ chatJid, err }, 'Failed to send acknowledgment'),
+  );
+
   let hadError = false;
   let outputSentToUser = false;
 
