@@ -236,6 +236,21 @@ Send a message on WhatsApp — the assistant should respond.
 
 ---
 
+## Troubleshooting
+
+### Service stops responding after inactivity
+
+If NanoClaw becomes unreachable after you haven't SSH'd in for a while, the most likely cause is that **linger is not enabled**. Without it, your user systemd instance (and all its services) gets killed when your last SSH session ends. `Restart=always` won't help because the entire service manager is gone.
+
+```bash
+# Check:
+loginctl show-user $(whoami) | grep Linger
+# Fix:
+sudo loginctl enable-linger $(whoami)
+```
+
+---
+
 ## What's NOT in git (lost on VM destruction)
 
 | Data | Location | In git? | Recovery |
