@@ -146,10 +146,24 @@ export function initDatabase(): void {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
+
+  // WAL mode survives unclean shutdowns without truncating the DB file.
+  // busy_timeout prevents SQLITE_BUSY when concurrent reads/writes overlap.
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('busy_timeout = 5000');
+
   createSchema(db);
 
   // Migrate from JSON files if they exist
   migrateJsonState();
+}
+
+export function closeDatabase(): void {
+  if (db?.open) {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    db.close();
+  }
 }
 
 /** @internal - for tests only. Creates a fresh in-memory database. */
