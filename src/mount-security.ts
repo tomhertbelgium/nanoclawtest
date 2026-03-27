@@ -80,6 +80,13 @@ export function loadMountAllowlist(): MountAllowlist | null {
       throw new Error('allowedRoots must be an array');
     }
 
+    // Normalize plain string entries to objects (e.g. "/path" → { path: "/path" })
+    allowlist.allowedRoots = allowlist.allowedRoots.map((root) =>
+      typeof root === 'string'
+        ? { path: root, allowReadWrite: true }
+        : root,
+    ) as AllowedRoot[];
+
     if (!Array.isArray(allowlist.blockedPatterns)) {
       throw new Error('blockedPatterns must be an array');
     }
