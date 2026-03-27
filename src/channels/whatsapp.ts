@@ -50,6 +50,9 @@ export class WhatsAppChannel implements Channel {
   private opts: WhatsAppChannelOpts;
   private lastEventAt = Date.now();
   private healthCheckTimer?: ReturnType<typeof setInterval>;
+  private reconnectAttempt = 0;
+  private static readonly RECONNECT_BASE_MS = 2000;
+  private static readonly RECONNECT_MAX_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(opts: WhatsAppChannelOpts) {
     this.opts = opts;
@@ -115,21 +118,24 @@ export class WhatsAppChannel implements Channel {
         );
 
         if (shouldReconnect) {
-          logger.info('Reconnecting...');
-          this.connectInternal().catch((err) => {
-            logger.error({ err }, 'Failed to reconnect, retrying in 5s');
-            setTimeout(() => {
-              this.connectInternal().catch((err2) => {
-                logger.error({ err: err2 }, 'Reconnection retry failed');
-              });
-            }, 5000);
-          });
+          this.reconnectAttempt++;
+          const delay = Math.min(
+            WhatsAppChannel.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt - 1),
+            WhatsAppChannel.RECONNECT_MAX_MS,
+          );
+          logger.info({ attempt: this.reconnectAttempt, delayMs: delay }, 'Reconnecting after backoff...');
+          setTimeout(() => {
+            this.connectInternal().catch((err) => {
+              logger.error({ err }, 'Reconnection attempt failed');
+            });
+          }, delay);
         } else {
           logger.info('Logged out. Run /setup to re-authenticate.');
           process.exit(0);
         }
       } else if (connection === 'open') {
         this.connected = true;
+        this.reconnectAttempt = 0;
         logger.info('Connected to WhatsApp');
 
         // Announce availability so WhatsApp relays subsequent presence updates (typing indicators)
