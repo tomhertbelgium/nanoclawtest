@@ -16,7 +16,7 @@ import readline from 'readline';
 import makeWASocket, {
   Browsers,
   DisconnectReason,
-  fetchLatestWaWebVersion,
+  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
 } from '@whiskeysockets/baileys';
@@ -61,7 +61,7 @@ async function connectSocket(
     process.exit(0);
   }
 
-  const { version } = await fetchLatestWaWebVersion({}).catch((err) => {
+  const { version } = await fetchLatestBaileysVersion({}).catch((err) => {
     logger.warn(
       { err },
       'Failed to fetch latest WA Web version, using default',
@@ -79,24 +79,7 @@ async function connectSocket(
     browser: Browsers.macOS('Chrome'),
   });
 
-  if (usePairingCode && phoneNumber && !state.creds.me) {
-    // Request pairing code after a short delay for connection to initialize
-    // Only on first connect (not reconnect after 515)
-    setTimeout(async () => {
-      try {
-        const code = await sock.requestPairingCode(phoneNumber!);
-        console.log(`\n🔗 Your pairing code: ${code}\n`);
-        console.log('  1. Open WhatsApp on your phone');
-        console.log('  2. Tap Settings → Linked Devices → Link a Device');
-        console.log('  3. Tap "Link with phone number instead"');
-        console.log(`  4. Enter this code: ${code}\n`);
-        fs.writeFileSync(STATUS_FILE, `pairing_code:${code}`);
-      } catch (err: any) {
-        console.error('Failed to request pairing code:', err.message);
-        process.exit(1);
-      }
-    }, 3000);
-  }
+  let pairingCodeRequested = false;
 
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -109,6 +92,26 @@ async function connectSocket(
       console.log('  2. Tap Settings → Linked Devices → Link a Device');
       console.log('  3. Point your camera at the QR code below\n');
       qrcode.generate(qr, { small: true });
+
+      // Request pairing code when QR is available (connection is ready)
+      if (usePairingCode && phoneNumber && !pairingCodeRequested) {
+        pairingCodeRequested = true;
+        setTimeout(async () => {
+          try {
+            const code = await sock.requestPairingCode(phoneNumber!);
+            console.log(`\n🔗 Your pairing code: ${code}\n`);
+            console.log('  1. Open WhatsApp on your phone');
+            console.log('  2. Tap Settings → Linked Devices → Link a Device');
+            console.log('  3. Tap "Link with phone number instead"');
+            console.log(`  4. Enter this code: ${code}\n`);
+            fs.writeFileSync(STATUS_FILE, `pairing_code:${code}`);
+          } catch (err: any) {
+            // Don't exit — let the reconnect logic handle it
+            console.error('Failed to request pairing code:', err.message);
+            pairingCodeRequested = false;
+          }
+        }, 1000);
+      }
     }
 
     if (connection === 'close') {
@@ -127,6 +130,10 @@ async function connectSocket(
         // registration completes. Reconnect to finish the handshake.
         console.log('\n⟳ Stream error (515) after pairing — reconnecting...');
         connectSocket(phoneNumber, true);
+      } else if (reason === 405) {
+        // 405 = temporary server rejection (rate limit), retry with backoff
+        console.log('\n⟳ Connection rejected (405) — retrying in 30s...');
+        setTimeout(() => connectSocket(phoneNumber, true), 30000);
       } else {
         fs.writeFileSync(STATUS_FILE, `failed:${reason || 'unknown'}`);
         console.log('\n✗ Connection failed. Please try again.');

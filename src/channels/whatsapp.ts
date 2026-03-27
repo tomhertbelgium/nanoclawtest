@@ -6,7 +6,7 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   WASocket,
-  fetchLatestWaWebVersion,
+  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   normalizeMessageContent,
   useMultiFileAuthState,
@@ -53,6 +53,9 @@ export class WhatsAppChannel implements Channel {
   private reconnectAttempt = 0;
   private static readonly RECONNECT_BASE_MS = 2000;
   private static readonly RECONNECT_MAX_MS = 5 * 60 * 1000; // 5 minutes
+  private cachedWaVersion?: [number, number, number];
+  private reconnectTimer?: ReturnType<typeof setTimeout>;
+  private socketGeneration = 0;
 
   constructor(opts: WhatsAppChannelOpts) {
     this.opts = opts;
@@ -65,20 +68,43 @@ export class WhatsAppChannel implements Channel {
   }
 
   private async connectInternal(onFirstOpen?: () => void): Promise<void> {
+    // Cancel any pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+
+    // Close previous socket to prevent duplicate connections
+    if (this.sock) {
+      try {
+        this.sock.ev.removeAllListeners('connection.update');
+        this.sock.ev.removeAllListeners('creds.update');
+        this.sock.ev.removeAllListeners('messages.upsert');
+        this.sock.end(undefined);
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+
+    const generation = ++this.socketGeneration;
+
     const authDir = path.join(STORE_DIR, 'auth');
     fs.mkdirSync(authDir, { recursive: true });
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-    const { version } = await fetchLatestWaWebVersion({}).catch((err) => {
-      logger.warn(
-        { err },
-        'Failed to fetch latest WA Web version, using default',
-      );
-      return { version: undefined };
-    });
+    if (!this.cachedWaVersion) {
+      const { version } = await fetchLatestBaileysVersion({}).catch((err) => {
+        logger.warn(
+          { err },
+          'Failed to fetch latest Baileys version, using default',
+        );
+        return { version: undefined };
+      });
+      if (version) this.cachedWaVersion = version;
+    }
     this.sock = makeWASocket({
-      version,
+      version: this.cachedWaVersion,
       auth: {
         creds: state.creds,
         keys: makeCacheableSignalKeyStore(state.keys, logger),
@@ -89,6 +115,8 @@ export class WhatsAppChannel implements Channel {
     });
 
     this.sock.ev.on('connection.update', (update) => {
+      // Ignore events from stale sockets
+      if (generation !== this.socketGeneration) return;
       this.lastEventAt = Date.now();
       const { connection, lastDisconnect, qr } = update;
 
@@ -120,11 +148,16 @@ export class WhatsAppChannel implements Channel {
         if (shouldReconnect) {
           this.reconnectAttempt++;
           const delay = Math.min(
-            WhatsAppChannel.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt - 1),
+            WhatsAppChannel.RECONNECT_BASE_MS *
+              Math.pow(2, this.reconnectAttempt - 1),
             WhatsAppChannel.RECONNECT_MAX_MS,
           );
-          logger.info({ attempt: this.reconnectAttempt, delayMs: delay }, 'Reconnecting after backoff...');
-          setTimeout(() => {
+          logger.info(
+            { attempt: this.reconnectAttempt, delayMs: delay },
+            'Reconnecting after backoff...',
+          );
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = undefined;
             this.connectInternal().catch((err) => {
               logger.error({ err }, 'Reconnection attempt failed');
             });
@@ -184,11 +217,13 @@ export class WhatsAppChannel implements Channel {
     });
 
     this.sock.ev.on('creds.update', () => {
+      if (generation !== this.socketGeneration) return;
       this.lastEventAt = Date.now();
       saveCreds();
     });
 
     this.sock.ev.on('messages.upsert', async ({ messages }) => {
+      if (generation !== this.socketGeneration) return;
       this.lastEventAt = Date.now();
       for (const msg of messages) {
         try {
@@ -304,6 +339,10 @@ export class WhatsAppChannel implements Channel {
 
   async disconnect(): Promise<void> {
     this.connected = false;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     if (this.healthCheckTimer) {
       clearInterval(this.healthCheckTimer);
       this.healthCheckTimer = undefined;
