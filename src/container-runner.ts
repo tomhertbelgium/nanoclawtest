@@ -124,6 +124,17 @@ function buildVolumeMounts(
         readonly: true,
       });
     }
+
+    // Mount apps directory for groups with deploy permission
+    if (group.containerConfig?.canDeploy) {
+      const appsDir = path.join(os.homedir(), 'apps');
+      fs.mkdirSync(appsDir, { recursive: true });
+      mounts.push({
+        hostPath: appsDir,
+        containerPath: '/workspace/extra/apps',
+        readonly: false,
+      });
+    }
   }
 
   // Per-group Claude sessions directory (isolated from other groups)
