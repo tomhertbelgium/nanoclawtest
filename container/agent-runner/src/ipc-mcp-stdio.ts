@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const canDeploy = process.env.NANOCLAW_CAN_DEPLOY === '1';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -358,16 +359,16 @@ async function pollForWebappResult(requestId: string, timeoutMs: number): Promis
 
 server.tool(
   'deploy_webapp',
-  `Deploy a static web project. Before calling this, write your project files to /workspace/extra/apps/<name>/ with at least an index.html. The project will be live at https://intellilab.dev/<name>/. Main group only.`,
+  `Deploy a static web project. Before calling this, write your project files to /workspace/extra/apps/<name>/ with at least an index.html. The project will be live at https://intellilab.dev/<name>/. Requires deploy permission.`,
   {
     name: z.string()
       .regex(/^[a-z0-9][a-z0-9-]{0,49}$/, 'Must be lowercase alphanumeric with hyphens, max 50 chars')
       .describe('Project name (becomes the URL path)'),
   },
   async (args) => {
-    if (!isMain) {
+    if (!isMain && !canDeploy) {
       return {
-        content: [{ type: 'text' as const, text: 'Only the main group can deploy webapps.' }],
+        content: [{ type: 'text' as const, text: 'This group does not have deploy permission.' }],
         isError: true,
       };
     }
@@ -410,9 +411,9 @@ server.tool(
     name: z.string().describe('Project name to remove'),
   },
   async (args) => {
-    if (!isMain) {
+    if (!isMain && !canDeploy) {
       return {
-        content: [{ type: 'text' as const, text: 'Only the main group can kill webapps.' }],
+        content: [{ type: 'text' as const, text: 'This group does not have deploy permission.' }],
         isError: true,
       };
     }
@@ -443,9 +444,9 @@ server.tool(
   'List all active deployed web projects with their URLs. Main group only.',
   {},
   async () => {
-    if (!isMain) {
+    if (!isMain && !canDeploy) {
       return {
-        content: [{ type: 'text' as const, text: 'Only the main group can list webapps.' }],
+        content: [{ type: 'text' as const, text: 'This group does not have deploy permission.' }],
         isError: true,
       };
     }

@@ -30,6 +30,7 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  canDeploy?: boolean; // Allow this group to deploy/kill webapps
 }
 
 export interface RegisteredGroup {

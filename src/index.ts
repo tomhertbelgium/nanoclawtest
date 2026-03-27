@@ -351,6 +351,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
+        canDeploy: group.containerConfig?.canDeploy,
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>

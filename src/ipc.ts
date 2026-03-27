@@ -460,7 +460,10 @@ export async function processTaskIpc(
       break;
 
     case 'webapp': {
-      if (!isMain) {
+      const canDeploy = Object.values(registeredGroups).find(
+        (g) => g.folder === sourceGroup,
+      )?.containerConfig?.canDeploy;
+      if (!isMain && !canDeploy) {
         logger.warn({ sourceGroup }, 'Unauthorized webapp attempt blocked');
         break;
       }
