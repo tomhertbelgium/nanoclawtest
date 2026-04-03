@@ -84,6 +84,43 @@ function buildTriggerPattern(trigger: string | undefined): RegExp {
   return new RegExp(`^(?:${escaped})\\b`, 'i');
 }
 
+/**
+ * Find the first matching trigger keyword from a list of messages.
+ * Returns the matched trigger (e.g. "@analyst") or undefined.
+ */
+function findMatchedTrigger(
+  messages: NewMessage[],
+  group: RegisteredGroup,
+  allowlistCfg: ReturnType<typeof loadSenderAllowlist>,
+): string | undefined {
+  if (!group.trigger) return undefined;
+  const triggers = group.trigger.split('|').map((t) => t.trim());
+  for (const msg of messages) {
+    const content = msg.content.trim();
+    if (!msg.is_from_me && !isTriggerAllowed(msg.chat_jid, msg.sender, allowlistCfg)) continue;
+    for (const t of triggers) {
+      const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`^${escaped}\\b`, 'i').test(content)) return t;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the group with the correct folder based on which trigger matched.
+ * If triggerFolders maps the matched trigger to an alternate folder, return
+ * a copy of the group with that folder applied.
+ */
+function resolveGroupForTrigger(
+  group: RegisteredGroup,
+  matchedTrigger: string | undefined,
+): RegisteredGroup {
+  if (!matchedTrigger || !group.triggerFolders) return group;
+  const folder = group.triggerFolders[matchedTrigger];
+  if (!folder || folder === group.folder) return group;
+  return { ...group, folder };
+}
+
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
   const identifier = group.folder.toLowerCase().replace(/_/g, '-');
@@ -203,6 +240,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (missedMessages.length === 0) return true;
 
   // For non-main groups, check if trigger is required and present
+  let resolvedGroup = group;
   if (!isMainGroup && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
     const groupTrigger = buildTriggerPattern(group.trigger);
@@ -212,6 +250,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
+
+    // Resolve to the correct folder based on which trigger matched
+    const matched = findMatchedTrigger(missedMessages, group, allowlistCfg);
+    resolvedGroup = resolveGroupForTrigger(group, matched);
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -254,7 +296,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const output = await runAgent(resolvedGroup, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =

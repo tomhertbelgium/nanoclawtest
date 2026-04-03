@@ -41,6 +41,7 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  triggerFolders?: Record<string, string>; // Maps individual triggers to alternate folders
 }
 
 export interface NewMessage {
