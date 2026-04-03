@@ -75,6 +75,15 @@ const queue = new GroupQueue();
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
+function buildTriggerPattern(trigger: string | undefined): RegExp {
+  if (!trigger) return TRIGGER_PATTERN;
+  const escaped = trigger
+    .split('|')
+    .map((t) => t.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+  return new RegExp(`^(?:${escaped})\\b`, 'i');
+}
+
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
   if (group.isMain) return;
   const identifier = group.folder.toLowerCase().replace(/_/g, '-');
@@ -196,9 +205,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
-    const groupTrigger = group.trigger
-      ? new RegExp(`^${group.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
-      : TRIGGER_PATTERN;
+    const groupTrigger = buildTriggerPattern(group.trigger);
     const hasTrigger = missedMessages.some(
       (m) =>
         groupTrigger.test(m.content.trim()) &&
@@ -436,9 +443,7 @@ async function startMessageLoop(): Promise<void> {
           // context when a trigger eventually arrives.
           if (needsTrigger) {
             const allowlistCfg = loadSenderAllowlist();
-            const groupTrigger = group.trigger
-              ? new RegExp(`^${group.trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
-              : TRIGGER_PATTERN;
+            const groupTrigger = buildTriggerPattern(group.trigger);
             const hasTrigger = groupMessages.some(
               (m) =>
                 groupTrigger.test(m.content.trim()) &&
