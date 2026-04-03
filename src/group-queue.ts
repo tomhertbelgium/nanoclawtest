@@ -154,6 +154,14 @@ export class GroupQueue {
   }
 
   /**
+   * Get the folder of the currently active container for a group, if any.
+   */
+  getActiveFolder(groupJid: string): string | null {
+    const state = this.groups.get(groupJid);
+    return state?.active ? (state.groupFolder ?? null) : null;
+  }
+
+  /**
    * Send a follow-up message to the active container via IPC file.
    * Returns true if the message was written, false if no active container.
    */

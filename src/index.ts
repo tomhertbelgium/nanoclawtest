@@ -97,7 +97,11 @@ function findMatchedTrigger(
   const triggers = group.trigger.split('|').map((t) => t.trim());
   for (const msg of messages) {
     const content = msg.content.trim();
-    if (!msg.is_from_me && !isTriggerAllowed(msg.chat_jid, msg.sender, allowlistCfg)) continue;
+    if (
+      !msg.is_from_me &&
+      !isTriggerAllowed(msg.chat_jid, msg.sender, allowlistCfg)
+    )
+      continue;
     for (const t of triggers) {
       const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (new RegExp(`^${escaped}\\b`, 'i').test(content)) return t;
@@ -296,32 +300,37 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(resolvedGroup, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    resolvedGroup,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -493,6 +502,31 @@ async function startMessageLoop(): Promise<void> {
                   isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
             if (!hasTrigger) continue;
+
+            // If trigger resolves to a different folder than the active
+            // container, close the old one so a new container starts.
+            if (group.triggerFolders) {
+              const matched = findMatchedTrigger(
+                groupMessages,
+                group,
+                allowlistCfg,
+              );
+              const resolved = resolveGroupForTrigger(group, matched);
+              const activeFolder = queue.getActiveFolder(chatJid);
+              if (activeFolder && activeFolder !== resolved.folder) {
+                logger.info(
+                  {
+                    chatJid,
+                    from: activeFolder,
+                    to: resolved.folder,
+                  },
+                  'Trigger switched agent, closing active container',
+                );
+                queue.closeStdin(chatJid);
+                queue.enqueueMessageCheck(chatJid);
+                continue;
+              }
+            }
           }
 
           // Pull all messages since lastAgentTimestamp so non-trigger
